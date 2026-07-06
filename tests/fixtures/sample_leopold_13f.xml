@@ -1,0 +1,55 @@
+<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+<infoTable>
+<nameOfIssuer>SEMI CONDUCTOR ETF</nameOfIssuer>
+<cusip>123456789</cusip>
+<value>2040000000</value>
+<sshPrnamt>8000000</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>8000000</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+<infoTable>
+<nameOfIssuer>NVIDIA CORP</nameOfIssuer>
+<cusip>67066G104</cusip>
+<value>1570000000</value>
+<sshPrnamt>10000000</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>10000000</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+<infoTable>
+<nameOfIssuer>ORACLE CORP</nameOfIssuer>
+<cusip>68389X105</cusip>
+<value>1070000000</value>
+<sshPrnamt>6000000</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>6000000</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+<infoTable>
+<nameOfIssuer>SEMI ETF PUT OPTION</nameOfIssuer>
+<cusip>999999999</cusip>
+<value>12345678</value>
+<sshPrnamt>50000</sshPrnamt>
+<sshPrnamtType>SH</sshPrnamtType>
+<putCall>Put</putCall>
+<investmentDiscretion>SOLE</investmentDiscretion>
+<votingAuthority>
+<Sole>50000</Sole>
+<Shared>0</Shared>
+<None>0</None>
+</votingAuthority>
+</infoTable>
+</informationTable>

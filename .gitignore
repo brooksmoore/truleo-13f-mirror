@@ -1,0 +1,81 @@
+# Runtime state (bot-local, never commit)
+data/
+logs/
+state/
+*.db
+*.jsonl
+*.log
+idempotency.json
+KILL_SWITCH
+budget.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+venv/
+ENV/
+
+# Private keys / certs (CRITICAL — never commit) [added 2026-06-07 security pass]
+*.pem
+*.key
+*.p12
+
+# Broker OAuth tokens (SECRET — never commit) [2026-06-16]
+live_broker/.rh_tokens.json
+live_broker/venv/
+
+# Internal ops/audit docs (bot-local working notes, not for the public repo)
+# [added 2026-07-06, portfolio-cleanup pass]
+AUDIT-LEDGER.md
+STATUS.md
+AUDITOR-ONBOARDING.md
+AGENTS.md
+GROK.md
+CLAUDE.md
+DEFINITION_OF_DONE.md
+CRITICAL_CATALYST_FILTER_GATE_REPORT.md
+P8_INTEG_REPORT.md
+PART_A_PASS7_REPORT.md
+PART_B_PASS8_REPORT.md
+RUNBOOK-phase2.md
+GO-LIVE-RUNBOOK-leopold.md
+GROK_HANDOFF_*.md
+DONE_GROK_HANDOFF_*.md
+handoff-*.md
+mirror-basket-agent-spec.md
+
+# Contains the real Robinhood account number as a hardcoded default (not a secret credential
+# by itself, but no reason to publish it) [2026-07-06, portfolio-cleanup pass]
+config.py

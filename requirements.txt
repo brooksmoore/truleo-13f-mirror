@@ -1,0 +1,9 @@
+# Mirror-basket uses near-zero deps.
+# LLM (Haiku catalyst tagger only) — optional for mocks; real uses cheap Haiku.
+anthropic==0.45.2  # if using direct; prefer shared LLMClient seam when wired
+
+# All other: stdlib + sqlite3. No yfinance etc — use MCP quotes or stdlib urllib for EDGAR.
+# For real MCP Robinhood: the grok mcp tools (no pip).
+
+# Umbrella canonical snapshot contract (emit + validate; no Flask):
+-e ../umbrella
