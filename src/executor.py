@@ -65,6 +65,9 @@ class MirrorExecutor:
         self._idemp_path = self.data_dir / "idempotency.json"
         self._idemp: set[str] = set()
         self._load_idemp()
+        self._clean_cycles_path = self.data_dir / "clean_cycles.json"
+        self._clean_cycles: int = 0
+        self._load_clean_cycles()
 
         # budget light (for the Haiku calls upstream) — from configured logs root (PL-7)
         self.budget_path = Path(CFG.logs_dir) / "budget.json"
@@ -88,6 +91,43 @@ class MirrorExecutor:
 
     def _save_idemp(self):
         self._idemp_path.write_text(json.dumps(list(self._idemp)))
+
+    def _load_clean_cycles(self) -> None:
+        if self._clean_cycles_path.exists():
+            try:
+                payload = json.loads(self._clean_cycles_path.read_text())
+                self._clean_cycles = int(payload.get("clean_cycles_since_failure", 0))
+            except Exception:
+                self._clean_cycles = 0
+
+    def _persist_clean_cycles(self) -> None:
+        self._clean_cycles_path.write_text(
+            json.dumps({
+                "clean_cycles_since_failure": self._clean_cycles,
+                "updated": datetime.now(timezone.utc).isoformat(),
+            })
+        )
+
+    def clean_cycles_since_failure(self) -> int:
+        return self._clean_cycles
+
+    def reset_clean_cycles_on_graveyard_event(self, action: str) -> None:
+        if action in {"silent_failure", "confirm_fill_failed", "order_accepted_no_fill"}:
+            self._clean_cycles = 0
+            self._persist_clean_cycles()
+
+    def _record_clean_cycle(self, *, intended_qty: float, confirmed_qty: float) -> None:
+        if abs(intended_qty - confirmed_qty) > 1e-4:
+            self.graveyard.record_event(
+                "silent_failure",
+                outcome="mismatch",
+                reject_reason="intended!=filled",
+                meta={"intended": intended_qty, "confirmed": confirmed_qty},
+            )
+            self._clean_cycles = 0
+        else:
+            self._clean_cycles += 1
+        self._persist_clean_cycles()
 
     def _load_budget(self):
         if self.budget_path.exists():
@@ -188,6 +228,22 @@ class MirrorExecutor:
             self.graveyard.record_event("killed", outcome="stand_down", reject_reason="kill_switch", meta={"trigger": trigger_id})
             return results
 
+        idemp_blocked = bool(plan_orders and ":none" in trigger_id)
+        if idemp_blocked:
+            import logging
+
+            logging.getLogger(__name__).error(
+                "REFUSING idempotency for trigger_id=%s — :none fallback with %d orders would poison cache",
+                trigger_id,
+                len(plan_orders),
+            )
+            self.graveyard.record_event(
+                "none_trigger_guard",
+                outcome="idemp_blocked",
+                reject_reason="trigger_id_contains_none",
+                meta={"trigger": trigger_id, "order_count": len(plan_orders)},
+            )
+
         # Ownership: snapshot truleo's own mark-to-market NAV once for this cycle (compounding sizing
         # base). Cached so every order in this plan sizes against the same NAV reading, and so
         # translate_weight_to_shares doesn't re-quote every owned ticker per order.
@@ -207,6 +263,9 @@ class MirrorExecutor:
         keys_added_this_plan: set[str] = set()
         # pending_fills: collect (ticker, side, actual_filled, avg_fill_price) for ledger update after broker confirm-after-fill
         pending_fills: list[tuple[str, str, float, float]] = []
+        cycle_intended_qty = 0.0
+        cycle_confirmed_qty = 0.0
+        cycle_had_placement = False
 
         for intent in plan_orders:
             if self._killed():
@@ -297,6 +356,10 @@ class MirrorExecutor:
             # AUDITOR FIX (PL3-BUG-1): use res.filled_shares directly — no fallback to abs(delta).
             # The `else abs(delta)` fallback was fabricating fills when success=True but filled_shares=0 (poll timeout).
             actual_filled = res.filled_shares  # real qty from broker; 0 = no confirmed fill (partial, timeout, or pending)
+            if res.success:
+                cycle_had_placement = True
+                cycle_intended_qty += abs(delta)
+                cycle_confirmed_qty += actual_filled
             if res.success and actual_filled > 0:
                 self.plog.append(make_log_entry("fill", intent.ticker, side=side, qty=actual_filled, px=res.avg_fill_price, order_id=res.order_id))
                 self.graveyard.record_event("fill", ticker=intent.ticker, signed_qty=actual_filled, outcome="filled", meta={"px": res.avg_fill_price, "intended_delta": delta})
@@ -305,6 +368,7 @@ class MirrorExecutor:
             elif res.success and actual_filled == 0:
                 # Accepted but no confirmed fill (poll timeout or truly 0 fill) — do NOT fabricate; log for audit trail
                 self.graveyard.record_event("order_accepted_no_fill", ticker=intent.ticker, outcome="no_fill_confirmed", reject_reason=res.reason, meta={"intended_delta": delta, "order_id": res.order_id})
+                self.reset_clean_cycles_on_graveyard_event("order_accepted_no_fill")
             else:
                 self.graveyard.record_event("fail", ticker=intent.ticker, outcome="place_fail", reject_reason=res.reason)
             results.append(res)
@@ -316,7 +380,7 @@ class MirrorExecutor:
                 keys_added_this_plan.add(key)
 
         # PL-13: batch save once per cycle/plan (not per order/skip)
-        if keys_added_this_plan:
+        if keys_added_this_plan and not idemp_blocked:
             self._idemp |= keys_added_this_plan
             self._save_idemp()
             # cheap prune: if set grows large, retain recent-ish (keys contain trigger so scoped; list slice arbitrary but bounds)
@@ -357,6 +421,14 @@ class MirrorExecutor:
 
         # Reset cycle cache so a stale NAV never leaks into a later, unrelated call this process.
         self._cycle_own_nav = None
+
+        if cycle_had_placement:
+            self._record_clean_cycle(
+                intended_qty=cycle_intended_qty,
+                confirmed_qty=cycle_confirmed_qty,
+            )
+        elif plan_orders:
+            self._record_clean_cycle(intended_qty=0.0, confirmed_qty=0.0)
 
         return results
 

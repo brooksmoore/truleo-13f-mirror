@@ -29,6 +29,19 @@ from src.mcp.robinhood_client import RealRobinhoodClient
 from live_broker.rh_transport import RobinhoodMCPBridge
 
 
+def _write_heartbeat(data_dir: Path) -> None:
+    """Belt-and-suspenders heartbeat (shell wrapper also writes pre-python)."""
+    from datetime import datetime, timezone
+    import json
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "stage": "python_start",
+    }
+    (data_dir / "heartbeat.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--execute", action="store_true", help="Place real orders (default: dry run, no orders).")
@@ -37,6 +50,7 @@ def main():
 
     cfg = leopold_only_config(use_live_edgar=True, use_live_broker=True, skip_attribution=True)
     data_dir = Path(cfg.data_dir); data_dir.mkdir(exist_ok=True)
+    _write_heartbeat(data_dir)
     logs_dir = Path(cfg.logs_dir); logs_dir.mkdir(exist_ok=True)
     kill = data_dir / "KILL_SWITCH"
 
