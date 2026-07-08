@@ -80,3 +80,7 @@ whether "mirror what a specific fund discloses" beats a naive benchmark, with re
 plumbing proven out along the way.
 
 **Not financial advice.**
+
+---
+
+*This agent is one of a small fleet of AI-built trading systems run under a read-only supervisory layer, built through a multi-model process (one model builds, a second audits independently). The process is documented in the [case study](https://github.com/brooksmoore/ai-orchestration-case-study).*
