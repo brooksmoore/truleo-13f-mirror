@@ -5,7 +5,7 @@ Places a single SMALL real order (default ~$2 of CLSK) through the decoupled bri
 and prints the FULL OrderResult (now incl. the real broker error message). Either confirms the live wire
 works (you'll own ~$2 of CLSK) or shows exactly why place failed — without firing all ten.
 
-    cd /Users/brooksmoore/Desktop/truleo_agent
+    cd /Users/brooksmoore/Desktop/portfolio-mirror-agent
     live_broker/venv/bin/python -m live_broker.probe_place            # ~$2 CLSK
     live_broker/venv/bin/python -m live_broker.probe_place RIOT 2     # custom ticker / dollars
 """

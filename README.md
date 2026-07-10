@@ -1,4 +1,4 @@
-# truleo — 13F Mirror-Basket Trading Agent
+# Portfolio Mirror Agent — 13F Mirror-Basket Trading Agent
 
 A live trading bot that automatically mirrors the disclosed public stock holdings of a specific
 hedge fund (a 13F "smart money" mirror strategy), running on a ring-fenced ~$100 Robinhood
