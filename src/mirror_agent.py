@@ -226,6 +226,36 @@ def run_cycle(
         t_fid = (trump_raw[0].get("filing_id") if trump_raw else "none") if trump_status == "verified" else "none"
         l_acc = (leopold_raw[0].get("filing_accession") if leopold_raw else "none")
         trigger_id = f"trump:{t_fid}:leop:{l_acc}"
+        # Umbrella decisions contract (pre-execution; fail-safe — never blocks trading)
+        try:
+            from decision_emit import emit_plan_intents
+
+            def _px(tkr: str) -> float:
+                try:
+                    q = ex.client.get_quote(tkr)
+                    last = getattr(q, "last", 0.0) or 0.0
+                    return float(last)
+                except Exception:
+                    return 0.0
+
+            mode = "live" if getattr(cfg, "use_live_broker", False) else "paper"
+            _benches = None
+            try:
+                _benches = bench_entry  # set on verified Trump path; may be unset
+            except NameError:
+                _benches = None
+            n_dec = emit_plan_intents(
+                plan.orders,
+                mode=mode,
+                path=data_dir / "decisions.ndjson",
+                get_price=_px,
+                filing_id=str(l_acc),
+                benchmarks=_benches,
+            )
+            if n_dec:
+                print(f"[decisions] emitted {n_dec} pre-exec records")
+        except Exception as _dec_exc:
+            print(f"[decisions] emit skipped: {_dec_exc}")
         # PL-14: use the raw_positions captured in the single snapshot (no second client.get_positions)
         mcp_positions = snap.get("raw_positions") or (ex.client.get_positions() if hasattr(ex, "client") else [])
         results = ex.execute_plan(plan.orders, mcp_positions, trigger_id=trigger_id)
