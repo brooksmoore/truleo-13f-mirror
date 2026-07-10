@@ -43,7 +43,9 @@ class _BrokerBase:
         self.placed: list[tuple[str, str, float]] = []
 
     def get_buying_power(self) -> float:
-        return 10.0
+        # Deliberately generous: these gates test ownership/confirm-after-fill mechanics, not the
+        # buying-power settlement gate (see test_audit_buying_power_gate.py for that).
+        return 1000.0
 
     def get_quote(self, ticker: str) -> Quote:
         return Quote(ticker=ticker, bid=99.0, ask=101.0, last=100.0,

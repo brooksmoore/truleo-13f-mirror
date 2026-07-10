@@ -218,10 +218,54 @@ class MirrorExecutor:
         delta = target_shares - current_shares
         return delta
 
+    def _place_prepared_order(
+        self,
+        entry: tuple,
+        keys_added_this_plan: set[str],
+        pending_fills: list[tuple[str, str, float, float]],
+        results: list[OrderResult],
+    ) -> tuple[float, float, bool]:
+        """Places one order that already passed all pre-checks (ownership gate, idemp, subnotional,
+        safety veto). Shared by the sell pass and the buy pass. Returns (intended_abs_qty,
+        confirmed_filled_qty, placed) for the caller's clean-cycle bookkeeping."""
+        intent, key, side, qty, delta, price = entry
+        # Phase 2 surgical: record *real* res.filled_shares from broker (never fall back to intended delta).
+        # If broker confirms 0 fills (poll timeout, not-yet-filled accepted) we record 0 + log; drift corrects next cycle.
+        if self.place_spacing_sec > 0:
+            import time as _t; _t.sleep(self.place_spacing_sec)  # pace placements to avoid broker 429 throttling
+        res: OrderResult = self.client.place_market_order(intent.ticker, side, delta)
+        # AUDITOR FIX (PL3-BUG-1): use res.filled_shares directly — no fallback to abs(delta).
+        # The `else abs(delta)` fallback was fabricating fills when success=True but filled_shares=0 (poll timeout).
+        actual_filled = res.filled_shares  # real qty from broker; 0 = no confirmed fill (partial, timeout, or pending)
+        if res.success and actual_filled > 0:
+            self.plog.append(make_log_entry("fill", intent.ticker, side=side, qty=actual_filled, px=res.avg_fill_price, order_id=res.order_id))
+            self.graveyard.record_event("fill", ticker=intent.ticker, signed_qty=actual_filled, outcome="filled", meta={"px": res.avg_fill_price, "intended_delta": delta})
+            # queue for ledger update; verify against broker re-read below (confirm-after-fill)
+            pending_fills.append((intent.ticker, side, actual_filled, res.avg_fill_price))
+        elif res.success and actual_filled == 0:
+            # Accepted but no confirmed fill (poll timeout or truly 0 fill) — do NOT fabricate; log for audit trail
+            self.graveyard.record_event("order_accepted_no_fill", ticker=intent.ticker, outcome="no_fill_confirmed", reject_reason=res.reason, meta={"intended_delta": delta, "order_id": res.order_id})
+            self.reset_clean_cycles_on_graveyard_event("order_accepted_no_fill")
+        else:
+            self.graveyard.record_event("fail", ticker=intent.ticker, outcome="place_fail", reject_reason=res.reason)
+        results.append(res)
+        # IDEMP (PL13-BUG): only dedupe orders that actually reached the broker (filled or accepted).
+        # A hard place FAILURE (broker error, no order created) must stay RETRYABLE — otherwise a single
+        # transient failure permanently poisons the idemp cache and blocks the real order on every re-run
+        # (observed 2026-06-17: first --execute failed env-transient, recorded keys, blocked all 9 next run).
+        if res.success:
+            keys_added_this_plan.add(key)
+        return abs(delta), actual_filled, res.success
+
     def execute_plan(self, plan_orders: list[OrderIntent], current_positions: list[BrokerPosition], trigger_id: str = "manual") -> list[OrderResult]:
         """Execute the minimal orders from reconciler. Returns list of results.
         PL-13: idemp disk writes batched once per plan (cycle); keys scoped with trigger so historical replays dedupe without unbounded growth in practice.
         Ownership: sell gate enforced via ledger (fail-closed); confirm-after-fill before ledger update.
+        Settlement (2026-07-09): sells are placed and fully processed before any buy is sized/placed,
+        and buys are capped against REAL broker buying power re-queried after the sells — never against
+        the ledger's own_nav, which credits sell proceeds the instant a fill is confirmed even though
+        equities settle T+1/T+2. Sizing a same-cycle buy off unsettled proceeds gets rejected by the
+        broker ("Not enough buying power"); this now skips cleanly instead of attempting and failing.
         """
         results = []
         if self._killed():
@@ -267,6 +311,11 @@ class MirrorExecutor:
         cycle_confirmed_qty = 0.0
         cycle_had_placement = False
 
+        # PASS 1 (build): validate every intent (quote, sizing, ownership sell gate, idemp, subnotional,
+        # safety veto) but do not place yet. Orders that clear every gate are queued by side so sells can
+        # be placed — and settled — before any buy is sized against real buying power.
+        ready_sells: list[tuple] = []
+        ready_buys: list[tuple] = []
         for intent in plan_orders:
             if self._killed():
                 break
@@ -347,37 +396,56 @@ class MirrorExecutor:
                 keys_added_this_plan.add(key)
                 continue
 
-            # place (market, frac ok in mock)
-            # Phase 2 surgical: record *real* res.filled_shares from broker (never fall back to intended delta).
-            # If broker confirms 0 fills (poll timeout, not-yet-filled accepted) we record 0 + log; drift corrects next cycle.
-            if self.place_spacing_sec > 0:
-                import time as _t; _t.sleep(self.place_spacing_sec)  # pace placements to avoid broker 429 throttling
-            res: OrderResult = self.client.place_market_order(intent.ticker, side, delta)
-            # AUDITOR FIX (PL3-BUG-1): use res.filled_shares directly — no fallback to abs(delta).
-            # The `else abs(delta)` fallback was fabricating fills when success=True but filled_shares=0 (poll timeout).
-            actual_filled = res.filled_shares  # real qty from broker; 0 = no confirmed fill (partial, timeout, or pending)
-            if res.success:
+            entry = (intent, key, side, qty, delta, price)
+            (ready_sells if side == "sell" else ready_buys).append(entry)
+
+        # PASS 2 (place sells): settle exposure-reducing orders first.
+        for entry in ready_sells:
+            if self._killed():
+                break
+            intended, confirmed, placed = self._place_prepared_order(entry, keys_added_this_plan, pending_fills, results)
+            if placed:
                 cycle_had_placement = True
-                cycle_intended_qty += abs(delta)
-                cycle_confirmed_qty += actual_filled
-            if res.success and actual_filled > 0:
-                self.plog.append(make_log_entry("fill", intent.ticker, side=side, qty=actual_filled, px=res.avg_fill_price, order_id=res.order_id))
-                self.graveyard.record_event("fill", ticker=intent.ticker, signed_qty=actual_filled, outcome="filled", meta={"px": res.avg_fill_price, "intended_delta": delta})
-                # queue for ledger update; verify against broker re-read below (confirm-after-fill)
-                pending_fills.append((intent.ticker, side, actual_filled, res.avg_fill_price))
-            elif res.success and actual_filled == 0:
-                # Accepted but no confirmed fill (poll timeout or truly 0 fill) — do NOT fabricate; log for audit trail
-                self.graveyard.record_event("order_accepted_no_fill", ticker=intent.ticker, outcome="no_fill_confirmed", reject_reason=res.reason, meta={"intended_delta": delta, "order_id": res.order_id})
-                self.reset_clean_cycles_on_graveyard_event("order_accepted_no_fill")
-            else:
-                self.graveyard.record_event("fail", ticker=intent.ticker, outcome="place_fail", reject_reason=res.reason)
-            results.append(res)
-            # IDEMP (PL13-BUG): only dedupe orders that actually reached the broker (filled or accepted).
-            # A hard place FAILURE (broker error, no order created) must stay RETRYABLE — otherwise a single
-            # transient failure permanently poisons the idemp cache and blocks the real order on every re-run
-            # (observed 2026-06-17: first --execute failed env-transient, recorded keys, blocked all 9 next run).
-            if res.success:
-                keys_added_this_plan.add(key)
+                cycle_intended_qty += intended
+                cycle_confirmed_qty += confirmed
+
+        # Re-sync REAL, currently-spendable buying power before committing any buy. The sells just
+        # placed above do NOT count yet — equities settle T+1/T+2, so their proceeds aren't real
+        # buying power today. Sizing off the ledger's own_nav (which credits sale proceeds the instant
+        # a fill is confirmed) would let a same-cycle buy be sized against cash that doesn't exist yet
+        # at the broker, guaranteeing a "Not enough buying power" rejection. Fail-safe: a query failure
+        # is treated as $0 available (skip all buys this cycle) rather than risk overspending.
+        available_bp = 0.0
+        if ready_buys:
+            try:
+                available_bp = float(self.client.get_buying_power() or 0.0)
+            except Exception:
+                available_bp = 0.0
+                self.graveyard.record_event(
+                    "buying_power_check_failed", outcome="all_buys_skipped",
+                    reject_reason="get_buying_power_raised",
+                )
+
+        # PASS 3 (place buys): capped to real available buying power, greedily in plan order. A buy
+        # that would exceed what's actually settled is SKIPPED (clean, logged) rather than attempted
+        # and rejected by the broker; drift/the next filing cycle corrects it once cash settles.
+        for entry in ready_buys:
+            if self._killed():
+                break
+            intent, key, side, qty, delta, price = entry
+            notional = qty * price
+            if notional > available_bp + 1e-9:
+                self.graveyard.record_event(
+                    "skip", ticker=intent.ticker, outcome="insufficient_buying_power",
+                    reject_reason=f"notional_{notional:.2f}>available_{available_bp:.2f}",
+                )
+                continue
+            intended, confirmed, placed = self._place_prepared_order(entry, keys_added_this_plan, pending_fills, results)
+            if placed:
+                cycle_had_placement = True
+                cycle_intended_qty += intended
+                cycle_confirmed_qty += confirmed
+                available_bp -= notional
 
         # PL-13: batch save once per cycle/plan (not per order/skip)
         if keys_added_this_plan and not idemp_blocked:

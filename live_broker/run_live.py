@@ -5,12 +5,12 @@ Runs the full daily cycle as a plain process (no agent runtime): real EDGAR 13F 
 via the OAuth MCP bridge. Default is a DRY run (reads live account, computes + prints the plan,
 places NOTHING). Pass --execute to actually place orders on the agentic account (••••8050).
 
-    cd /Users/brooksmoore/Desktop/truleo_agent
+    cd /Users/brooksmoore/Desktop/portfolio-mirror-agent
     live_broker/venv/bin/python -m live_broker.run_live              # DRY (safe)
     live_broker/venv/bin/python -m live_broker.run_live --execute    # LIVE (places real orders)
 
-Cron (daily, after you've verified a dry + one attended live run):
-    0 14 * * 1-5  cd /…/truleo_agent && live_broker/venv/bin/python -m live_broker.run_live --execute >> live_broker/cron.log 2>&1
+Scheduled via launchd (com.portfolio-mirror-agent.rebalance.plist), weekdays at 14:00 — see
+~/Library/LaunchAgents/com.portfolio-mirror-agent.rebalance.plist for the exact schedule.
 """
 from __future__ import annotations
 import argparse, sys
@@ -55,7 +55,7 @@ def main():
     kill = data_dir / "KILL_SWITCH"
 
     mode = "EXECUTE (real orders)" if args.execute else "DRY (no orders)"
-    print(f"=== truleo_agent LIVE runner — Leopold-only — {mode} ===")
+    print(f"=== Portfolio Mirror Agent LIVE runner — Leopold-only — {mode} ===")
     if args.execute and kill.exists():
         print(f"KILL_SWITCH present at {kill} — refusing to execute. Remove it to trade."); sys.exit(2)
 
@@ -91,7 +91,13 @@ def main():
                                 can_spend=getattr(ex, "can_spend", None), record_spend=getattr(ex, "record_spend", None))
         for c in range(args.cycles):
             print(f"\n--- cycle {c+1} ({mode}) ---")
-            run_cycle(leop, trump, tagger, ex, data_dir, force=(c == 0), c=c, cfg=cfg)
+            # NOT force=(c==0): every cron/launchd invocation is a FRESH process, so c always starts
+            # at 0 — force=(c==0) was forcing a full reconcile+trade on EVERY daily run regardless of
+            # whether Leopold actually filed a new 13F, defeating the is_new_filing() quiet-cycle gate
+            # in mirror_agent.run_cycle (see tests/test_audit_filing_gate.py for the fail-before proof).
+            # force=False lets the on-disk accession cache do its job: a genuinely first-ever run (empty
+            # cache) still triggers correctly, since is_new_filing() compares against "" and returns True.
+            run_cycle(leop, trump, tagger, ex, data_dir, force=False, c=c, cfg=cfg)
         _emit_umbrella_snapshot(ex, g, cfg, data_dir, kill)
     print("\nDone." + ("" if args.execute else "  (DRY — nothing was placed. Re-run with --execute to trade.)"))
 
