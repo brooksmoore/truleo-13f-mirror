@@ -31,7 +31,20 @@ OUT = ROOT / "data" / "shadow_hedged_book.jsonl"
 TOP_N_LONGS = 10
 
 
+# Per-run memo so the sizing pass and the mark pass don't each hit Yahoo for the
+# same ticker (was 2 network fetches per ticker per run). Cleared naturally — the
+# script is a one-shot launchd job, so "per-run" == process lifetime.
+_CLOSE_MEMO: dict[str, Optional[float]] = {}
+
+
 def _yahoo_close(ticker: str) -> Optional[float]:
+    """Memoized per-run wrapper around the network fetch."""
+    if ticker not in _CLOSE_MEMO:
+        _CLOSE_MEMO[ticker] = _yahoo_close_fetch(ticker)
+    return _CLOSE_MEMO[ticker]
+
+
+def _yahoo_close_fetch(ticker: str) -> Optional[float]:
     """Independent daily close via Yahoo (same discipline as umbrella resolver)."""
     import json as _json
     import time
@@ -100,9 +113,9 @@ def load_leopold_top10(cache_path: Path = CACHE) -> tuple[list[LongPosition], li
     top_set = {p.ticker for p in long_pos}
     for h in shorts:
         tkr = str(h["ticker"]).upper()
-        if tkr not in top_set and tkr not in {x["ticker"] for x in top}:
-            # still include major put names disclosed (SMH/NVDA etc.) as portfolio hedges
-            pass
+        # (All disclosed puts are collected here; the top-10-match preference is
+        # applied once, below, via `matched` — a former no-op `if…pass` filter that
+        # looked like inverted logic was deleted in the 2026-07-11 review.)
         notional = sleeve * (float(h.get("source_weight") or 0) / short_total)
         # Cap hedge notional contribution so shadow stays order-of-sleeve
         hedges.append(HedgeNotional(ticker=tkr, put_notional_usd=notional))
