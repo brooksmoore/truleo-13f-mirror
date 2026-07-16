@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.portfolio-mirror-agent.drawdown_guard</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/python3.11</string>
+		<string>/Users/brooksmoore/Desktop/portfolio-mirror-agent/bin/drawdown_guard.py</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>3600</integer>
+	<key>StandardOutPath</key>
+	<string>/tmp/pma_drawdown_guard.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/pma_drawdown_guard.log</string>
+</dict>
+</plist>
