@@ -8,19 +8,19 @@ Brooks. Not edited except to append what fires.*
 ## Metric (checkable by script)
 - **NAV:** `data/state.json → capital.own_nav` (the ring-fenced ownership-ledger mark; verified
   self-consistent = cash + Σ position market_value).
-- **Cost basis (deployed capital):** **$97.58** (`capital.budget_allocation`).
+- **Cost basis (deployed capital):** **$100.00** (starting bankroll Brooks funded; note the system's `capital.budget_allocation` reads $97.58 — ~$2.42 undeployed/fees — but the risk baseline is the capital actually put in).
 - **Peak (high-water mark):** max own_nav ever recorded, persisted in `data/nav_hwm.json`.
-  Seeded at $97.58 (no higher NAV has occurred — pma has only declined since inception).
+  Seeded at $100.00 (no higher NAV has occurred — pma has only declined since inception).
 
 ## Thresholds & actions
 | Level | Trigger | $ value | Action (automated by `bin/drawdown_guard.py`) |
 |-------|---------|--------:|-----------------------------------------------|
-| **WARN** | own_nav ≤ 75% of peak (25% drawdown from high-water mark) | **$73.19** | macOS notification + log. No trading change. |
-| **HALT** | own_nav ≤ 50% of cost basis (50% loss of deployed capital) | **$48.79** | **Write `data/KILL_SWITCH`** → the executor fail-safe-halts all pma trading. Loud notification + log. |
+| **WARN** | own_nav ≤ 75% of peak (25% drawdown from high-water mark) | **$75.00** | macOS notification + log. No trading change. |
+| **HALT** | own_nav ≤ 50% of cost basis (50% loss of deployed capital) | **$50.00** | **Write `data/KILL_SWITCH`** → the executor fail-safe-halts all pma trading. Loud notification + log. |
 
 ## Status at registration (2026-07-16)
-- own_nav **$70.43** → **27.8% drawdown**. **WARN is ALREADY TRIGGERED** (past $73.19).
-- HALT ($48.79) is **not** triggered — $21.64 / ~31% of further downside remains.
+- own_nav **$70.43** → **30.0% drawdown**. **WARN is ALREADY TRIGGERED** (past $75.00).
+- HALT ($50.00) is **not** triggered — $20.43 / ~29% of further downside remains.
 
 ## What HALT does and does NOT do (important)
 - **DOES:** pull `KILL_SWITCH` so the bot stops trading (fail-safe — it can only STOP activity,

@@ -24,10 +24,10 @@ HWM = ROOT / "data" / "nav_hwm.json"
 KILL = ROOT / "data" / "KILL_SWITCH"
 LOG = ROOT / "logs" / "drawdown_guard.log"
 
-COST_BASIS = 97.58          # deployed capital (frozen per the stop doc)
+COST_BASIS = 100.00         # starting bankroll (Brooks funded ~$100; the round bankroll is the risk baseline)
 WARN_FRAC = 0.75            # 25% drawdown from peak
 HALT_FRAC_OF_COST = 0.50    # 50% loss of deployed capital
-HALT_LEVEL = HALT_FRAC_OF_COST * COST_BASIS  # $48.79
+HALT_LEVEL = HALT_FRAC_OF_COST * COST_BASIS  # $50.00
 
 
 def _notify(title: str, msg: str) -> None:
