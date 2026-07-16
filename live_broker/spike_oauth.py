@@ -13,7 +13,7 @@ It places NO orders. Run on your desktop (needs a browser for the Robinhood logi
 Tokens are cached in live_broker/.rh_tokens.json (gitignored). Delete it to re-auth from scratch.
 """
 from __future__ import annotations
-import asyncio, json, threading, time, webbrowser
+import asyncio, json, os, socket, sys, threading, time, webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -24,9 +24,63 @@ from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import OAuthClientMetadata, OAuthToken, OAuthClientInformationFull
 
 SERVER_URL = "https://agent.robinhood.com/mcp/trading"
-REDIRECT_PORT = 8765
+# Port for the local OAuth-redirect callback. MUST NOT collide with any long-lived
+# service — it previously defaulted to 8765, which the umbrella dashboard permanently
+# owns, so unattended re-auth could never bind the callback and looped forever opening
+# browser tabs (2026-07-14 incident). Env-overridable; default moved to a free port.
+REDIRECT_PORT = int(os.environ.get("PMA_OAUTH_REDIRECT_PORT", "8799"))
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
 TOKENS_PATH = Path(__file__).parent / ".rh_tokens.json"
+
+
+class UnattendedReauthRequired(RuntimeError):
+    """Raised instead of opening a browser when Robinhood needs interactive re-auth but
+    no human is present (e.g. a launchd/cron run). Fail CLOSED — never spawn browser tabs
+    in an unattended context. Re-mint the token by running spike_oauth.py attended."""
+
+
+def interactive_auth_allowed() -> bool:
+    """True only when it's safe to pop a browser for OAuth login: an attended terminal
+    session (TTY on stdin), or an explicit operator override. Under launchd there is no
+    TTY, so this returns False and callers fail closed."""
+    if os.environ.get("PMA_ALLOW_BROWSER_AUTH") == "1":
+        return True
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def open_auth_url_or_fail(url: str) -> None:
+    """Single choke point for launching the Robinhood OAuth login. Opens a browser only in
+    an attended session; otherwise raises UnattendedReauthRequired so the run aborts cleanly
+    without spawning tabs. Every re-auth path MUST route through this."""
+    if not interactive_auth_allowed():
+        raise UnattendedReauthRequired(
+            "Robinhood OAuth session expired and re-auth needs a browser, but this is an "
+            "unattended run — refusing to open a browser (fail closed). Re-mint the token by "
+            "running `live_broker/spike_oauth.py` in a terminal with a human present."
+        )
+    print("\n>>> Opening browser for Robinhood login. If it doesn't open, paste this URL:\n", url, "\n")
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
+def _assert_callback_port_free(port: int = REDIRECT_PORT) -> None:
+    """Fail closed if the OAuth-redirect port is already in use, rather than retry-looping.
+    Guards against a repeat of the 8765 dashboard collision on any future port choice."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("localhost", port))
+    except OSError as e:
+        raise UnattendedReauthRequired(
+            f"OAuth-redirect port {port} is already in use ({e}); cannot complete Robinhood "
+            f"login. Free the port or set PMA_OAUTH_REDIRECT_PORT to an unused one."
+        ) from e
+    finally:
+        s.close()
 
 
 class FileTokenStorage(TokenStorage):
@@ -71,6 +125,7 @@ def _wait_for_callback() -> tuple[str, str | None]:
         def log_message(self, *a):
             pass
 
+    _assert_callback_port_free(REDIRECT_PORT)  # fail closed instead of looping if the port is taken
     srv = HTTPServer(("localhost", REDIRECT_PORT), H)
     srv.handle_request()  # blocks until exactly one request
     srv.server_close()
@@ -81,11 +136,7 @@ async def main():
     storage = FileTokenStorage(TOKENS_PATH)
 
     async def redirect_handler(url: str) -> None:
-        print("\n>>> Opening browser for Robinhood login. If it doesn't open, paste this URL:\n", url, "\n")
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        open_auth_url_or_fail(url)  # attended → opens browser; unattended → raises (fail closed)
 
     async def callback_handler() -> tuple[str, str | None]:
         # run the blocking one-shot server off the event loop

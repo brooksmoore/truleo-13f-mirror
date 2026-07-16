@@ -15,7 +15,7 @@ The MCP SDK is async; this runs one asyncio loop in a background thread and mars
 to it, keeping a single MCP session open for the life of the `with` block.
 """
 from __future__ import annotations
-import asyncio, json, re, threading, webbrowser
+import asyncio, json, re, threading
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -24,7 +24,10 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.client.auth import OAuthClientProvider
 from mcp.shared.auth import OAuthClientMetadata
 
-from live_broker.spike_oauth import FileTokenStorage, _wait_for_callback, SERVER_URL, REDIRECT_URI, TOKENS_PATH
+from live_broker.spike_oauth import (
+    FileTokenStorage, _wait_for_callback, SERVER_URL, REDIRECT_URI, TOKENS_PATH,
+    open_auth_url_or_fail, UnattendedReauthRequired,
+)
 
 # Bot uses full names like "mcp__robinhood-trading__get_equity_quotes"; the server's tools are unprefixed.
 _PREFIX = "mcp__robinhood-trading__"
@@ -34,11 +37,9 @@ def _build_oauth() -> OAuthClientProvider:
     storage = FileTokenStorage(TOKENS_PATH)
 
     async def redirect_handler(url: str) -> None:
-        print(">>> Robinhood re-auth needed. Opening browser; if it doesn't open, paste:\n", url)
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        # Fail CLOSED under launchd/cron: never open a browser unattended (2026-07-14 incident —
+        # this spawned dozens of Robinhood tabs and bricked the laptop). Attended runs still open.
+        open_auth_url_or_fail(url)
 
     async def callback_handler():
         return await asyncio.to_thread(_wait_for_callback)

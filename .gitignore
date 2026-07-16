@@ -53,7 +53,7 @@ ENV/
 *.p12
 
 # Broker OAuth tokens (SECRET — never commit) [2026-06-16]
-live_broker/.rh_tokens.json
+live_broker/.rh_tokens.json*
 live_broker/venv/
 
 # Internal ops/audit docs (bot-local working notes, not for the public repo)
