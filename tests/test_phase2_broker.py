@@ -305,6 +305,19 @@ class RealClientLiveParserTests(unittest.TestCase):
         }
     }
 
+    # get_equity_quotes carries no volume; ADV comes from a real fundamentals fetch.
+    FUNDAMENTALS_RESP = {
+        "data": {
+            "results": [{
+                "symbol": "NVDA",
+                "volume": "150000000.000000",
+                "average_volume": "180000000.000000",
+                "average_volume_30_days": "175000000.000000",
+                "average_volume_2_weeks": "180000000.000000",
+            }]
+        }
+    }
+
     POSITIONS_RESP = {
         "data": {
             "positions": [
@@ -333,13 +346,27 @@ class RealClientLiveParserTests(unittest.TestCase):
 
     def test_live_get_quote_parses_real_mcp_shape(self):
         """get_quote() on live path must parse data.results[].quote (not flat keys)."""
-        client = self._make_live_client({"mcp__robinhood-trading__get_equity_quotes": self.QUOTE_RESP})
+        client = self._make_live_client({
+            "mcp__robinhood-trading__get_equity_quotes": self.QUOTE_RESP,
+            "mcp__robinhood-trading__get_equity_fundamentals": self.FUNDAMENTALS_RESP,
+        })
         q = client.get_quote("NVDA")
         self.assertAlmostEqual(q.bid, 200.06, places=2)
         self.assertAlmostEqual(q.ask, 200.10, places=2)
         self.assertAlmostEqual(q.last, 200.34, places=2)
         self.assertFalse(q.is_halted)
         self.assertEqual(q.ticker, "NVDA")
+        # ADV must be the REAL average volume from fundamentals — never a fabricated constant.
+        self.assertAlmostEqual(q.avg_daily_volume, 175000000.0, places=0)
+
+    def test_live_get_quote_fails_closed_when_adv_unavailable(self):
+        """If fundamentals is unavailable, ADV must be 0.0 (liquidity veto blocks) — NOT a
+        fabricated value that lets the safety check pass. Regression guard for Grok review #4."""
+        # only quotes answered; fundamentals returns {} -> no usable average-volume field
+        client = self._make_live_client({"mcp__robinhood-trading__get_equity_quotes": self.QUOTE_RESP})
+        q = client.get_quote("NVDA")
+        self.assertEqual(q.avg_daily_volume, 0.0)
+        self.assertNotEqual(q.avg_daily_volume, 20_000_000.0, "must not fabricate the old 20M ADV default")
 
     def test_live_get_positions_parses_real_mcp_shape(self):
         """get_positions() on live path must parse data.positions[] with quantity/average_buy_price."""
@@ -367,19 +394,22 @@ class RealClientLiveParserTests(unittest.TestCase):
         self.assertNotEqual(acct, "891728651", "_acct() must return the agentic account, not the default margin account")
 
     def test_live_get_quote_passes_symbols_list(self):
-        """get_equity_quotes must be called with symbols=[ticker] (list), not ticker= (scalar)."""
+        """get_equity_quotes AND get_equity_fundamentals must both be called with
+        symbols=[ticker] (list), not ticker= (scalar). Fundamentals is required now
+        so ADV is real, not fabricated."""
         calls = []
         def live_fn(tool_name, **params):
             calls.append((tool_name, params))
-            return self.QUOTE_RESP
+            return self.QUOTE_RESP if "quotes" in tool_name else self.FUNDAMENTALS_RESP
         client = RealRobinhoodClient(live_call_fn=live_fn)
         client.get_quote("NVDA")
-        self.assertEqual(len(calls), 1)
-        name, params = calls[0]
-        self.assertEqual(name, "mcp__robinhood-trading__get_equity_quotes")
-        self.assertIn("symbols", params)
-        self.assertIsInstance(params["symbols"], list)
-        self.assertIn("NVDA", params["symbols"])
+        by_tool = {name: params for name, params in calls}
+        self.assertIn("mcp__robinhood-trading__get_equity_quotes", by_tool)
+        self.assertIn("mcp__robinhood-trading__get_equity_fundamentals", by_tool)
+        for params in by_tool.values():
+            self.assertIn("symbols", params)
+            self.assertIsInstance(params["symbols"], list)
+            self.assertIn("NVDA", params["symbols"])
 
     def test_live_get_positions_passes_account_number(self):
         """get_equity_positions must be called with the agentic account_number."""

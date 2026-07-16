@@ -247,10 +247,50 @@ class RealRobinhoodClient:
             last = float(q.get("last_trade_price") or q.get("last_non_reg_trade_price") or 0.0)
             halted = (q.get("state", "active") != "active") or (not q.get("has_traded", True))
             ts = q.get("venue_last_trade_time") or datetime.now(timezone.utc).isoformat()
-            # volume not provided by get_equity_quotes; use safe ADV default so safety-veto ADV check passes
-            return Quote(ticker, bid, ask, last, 0.0, 20_000_000.0, halted, ts)
+            # get_equity_quotes carries no volume. Fetch REAL ADV from fundamentals so the
+            # liquidity veto (schemas.validate_execution_safety: order_size/ADV <= 5%) is a
+            # true gate. On any failure we return adv=0.0 -> the veto BLOCKS this order
+            # (fail-closed). We never fabricate volume to make the gate pass — that was the
+            # old bug (a live sleeve whose liquidity safety could not fire). See Grok review #4.
+            vol, adv = self._fetch_volume_adv(ticker)
+            return Quote(ticker, bid, ask, last, vol, adv, halted, ts)
         except Exception as e:
             raise ValueError(f"Failed to parse get_equity_quotes for {ticker}: {e}") from e
+
+    def _fetch_volume_adv(self, ticker: str) -> tuple[float, float]:
+        """Return (today_volume, average_daily_volume) from REAL fundamentals data.
+
+        Fail-closed: on any error or a missing/zero average-volume field, returns (0.0, 0.0)
+        so the liquidity veto blocks the order rather than passing on fabricated volume.
+        Logs loudly to stderr — a blocked order is safe and visible; a silent fabrication is
+        neither. pma rebalances rarely, so the extra read-only call is negligible cost.
+        """
+        try:
+            raw = self._call_mcp(
+                "mcp__robinhood-trading__get_equity_fundamentals", symbols=[ticker]
+            )
+            results = (raw.get("data") or {}).get("results") or []
+            if not results:
+                raise ValueError("no fundamentals results")
+            f = results[0] or {}
+            adv = float(
+                f.get("average_volume_30_days")
+                or f.get("average_volume")
+                or f.get("average_volume_2_weeks")
+                or 0.0
+            )
+            vol = float(f.get("volume") or 0.0)
+            if adv <= 0:
+                raise ValueError(f"no usable average-volume field: {f.get('average_volume')!r}")
+            return vol, adv
+        except Exception as e:
+            import sys
+            print(
+                f"[pma] WARN real ADV unavailable for {ticker} ({e}); returning adv=0 -> "
+                f"liquidity veto will BLOCK this order (fail-closed, never fabricated)",
+                file=sys.stderr,
+            )
+            return 0.0, 0.0
 
     def get_positions(self) -> list[Position]:
         if self._call_backend is not None:
